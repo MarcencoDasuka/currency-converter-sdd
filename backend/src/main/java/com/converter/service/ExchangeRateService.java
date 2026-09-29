@@ -25,6 +25,7 @@ public class ExchangeRateService {
     private final BnmClient bnmClient;
     private final BnmXmlParser bnmXmlParser;
     private final ExchangeRateRepository repository;
+    private final ExchangeRatePersistenceService persistenceService;
     private final int maxRollbackDays;
 
     public record ResolvedBulletin(
@@ -41,12 +42,25 @@ public class ExchangeRateService {
             BnmClient bnmClient,
             BnmXmlParser bnmXmlParser,
             ExchangeRateRepository repository,
+            ExchangeRatePersistenceService persistenceService,
             AppProperties appProperties
     ) {
         this.bnmClient = bnmClient;
         this.bnmXmlParser = bnmXmlParser;
         this.repository = repository;
+        this.persistenceService = persistenceService != null
+                ? persistenceService
+                : new ExchangeRatePersistenceService(repository);
         this.maxRollbackDays = appProperties.bnm().maxRollbackDays();
+    }
+
+    public ExchangeRateService(
+            BnmClient bnmClient,
+            BnmXmlParser bnmXmlParser,
+            ExchangeRateRepository repository,
+            AppProperties appProperties
+    ) {
+        this(bnmClient, bnmXmlParser, repository, new ExchangeRatePersistenceService(repository), appProperties);
     }
 
     public ResolvedBulletin getRatesForDate(LocalDate requestedDate) {
@@ -69,7 +83,7 @@ public class ExchangeRateService {
 
                 if (parsed.rates() != null && parsed.rates().size() >= 5) {
                     log.info("Successfully fetched and parsed {} rates from BNM for date {}", parsed.rates().size(), parsed.bulletinDate());
-                    saveRatesIdempotently(parsed.rates());
+                    persistenceService.saveRatesIdempotently(parsed.rates());
                     return createResolvedBulletin(parsed.bulletinDate(), date, "National Bank of Moldova", false, false, rollbackDays, parsed.rates());
                 } else {
                     log.warn("BNM bulletin for date {} was empty or had insufficient rates ({})", currentDate, parsed.rates() != null ? parsed.rates().size() : 0);
@@ -97,24 +111,8 @@ public class ExchangeRateService {
         throw new BulletinUnavailableException("No valid rate bulletin available from BNM or PostgreSQL within rollback limit (" + maxRollbackDays + " days)");
     }
 
-    @Transactional
     public void saveRatesIdempotently(List<ExchangeRateEntity> rates) {
-        for (ExchangeRateEntity entity : rates) {
-            try {
-                repository.upsertRate(
-                        entity.getNumericCode(),
-                        entity.getCurrencyCode(),
-                        entity.getCurrencyName(),
-                        entity.getNominal(),
-                        entity.getRate(),
-                        entity.getRateDate(),
-                        entity.getFetchedAt() != null ? entity.getFetchedAt() : Instant.now(),
-                        entity.getExternalId()
-                );
-            } catch (Exception e) {
-                log.error("Failed to upsert rate for {}: {}", entity.getCurrencyCode(), e.getMessage());
-            }
-        }
+        persistenceService.saveRatesIdempotently(rates);
     }
 
     private ResolvedBulletin createResolvedBulletin(

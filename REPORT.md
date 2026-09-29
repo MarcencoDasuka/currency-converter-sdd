@@ -86,6 +86,17 @@
 - **Симптом / Проблема:** В спецификации (`constitution.md`, `plan.md`, `tasks.md`) изначально предполагалось использование Testcontainers PostgreSQL (`TASK-405`). Однако запуск докер-контейнеров с динамическим агентным профилированием в среде Windows с кириллическими путями (`C:\Users\наш компухтер\...`) приводил к дедлокам Attach API и нестабильности локального тестового конвейера.
 - **Инженерное решение:** Задача `TASK-405` была переведена в статус отложенной (`[ ]`), а тяжелый запуск Testcontainers заменен на изолированные быстрые модульные тесты на Mockito/Dynamic Proxy (время прогона тестов сократилось до 4 секунд). Проверка синтаксиса миграций Flyway и схемы PostgreSQL валидируется встроенным анализатором Spring Data JPA (`hibernate.ddl-auto: validate`) и локальным Docker Compose.
 
+### Ошибка 8: Неоднозначность конструкторов `ExchangeRateService` при старте Spring IoC в Docker
+- **Симптом:** При первом запуске в Docker-контейнере сервис завершался ошибкой:
+  `BeanCreationException: ... Failed to instantiate [com.converter.service.ExchangeRateService]: No default constructor found`.
+- **Причина:** В классе `ExchangeRateService` присутствовали два конструктора (основной 5-аргументный со всеми зависимостями и 4-аргументный вспомогательный для юнит-тестов). В локальных юнит-тестах сервис создавался через `new ExchangeRateService(...)`, но в контейнере Spring IoC требовал однозначного указания точки внедрения.
+- **Исправление:** К целевому 5-аргументному конструктору добавлена явная аннотация `@Autowired`.
+
+### Ошибка 9: Ложное срабатывание аварийного статуса `Operating on Server-Side Cache` при штатном чтении из кэша PostgreSQL
+- **Симптом:** Пользователь обратил внимание, что предупреждающий желтый баннер *"Live BNM gateway unavailable. Rates successfully served from local PostgreSQL cache"* отображается постоянно при любой выбранной дате, создавая ложное впечатление, что шлюз НБМ недоступен.
+- **Причина:** В Pinia-хранилище `useCurrencyStore.ts` условие активации статуса `tier1_backend_cached` было реализовано как `if (data.offline || data.cached)`. В результате любое штатное обращение к сохраненным в PostgreSQL котировкам ошибочно интерпретировалось фронтендом как сетевая авария внешнего шлюза.
+- **Исправление:** Условие переведено на строгое `if (data.offline)`. Статус штатного кэширования отображается в виде ненавязчивого бейджа `[Cached]` и источника в карточке результата, а аварийный баннер появляется исключительно в случае реального сбоя связи с НБМ (`offline: true`). Дополнительно разработан интерактивный компонент `DatePicker.vue` с ограничениями дат (`max: today`, `min: 1994-01-01`), пресетами и информированием о выходных днях.
+
 ---
 
 ## 5. Анализ соответствия спецификациям (Spec Compliance Matrix)
@@ -106,6 +117,8 @@
 | **Запуск тестов одной командой** | Выполнено | Скрипты `run-tests.bat` (Windows) и `run-tests.sh` (Unix) |
 | **Git-процесс через Pull Requests** | Выполнено (Этапы 1–5) | Этапы 1–5 объединены через PR #1–#4; Этап 6 (патчи безопасности) зафиксирован непосредственно в `main` |
 | **Аудит безопасности и устранение уязвимостей** | Выполнено | Устранены 9 уязвимостей (SEC-01 – SEC-09), зафиксировано 6 отдельными коммитами |
+| **Контейнеризация стека (Docker Compose)** | Выполнено | `docker-compose.yml` (PostgreSQL 16, Spring Boot 3 на Temurin 21 JRE, Nginx Alpine SPA & reverse proxy) |
+| **Интерактивный DatePicker с ограничениями** | Выполнено | `DatePicker.vue` (диапазон `1994-01-01` .. `today`, быстрые пресеты, валидация и подсказки для небанковских дней) |
 
 ---
 
@@ -295,5 +308,64 @@ ALL 27 TESTS PASSED SUCCESSFULLY!
 4. `a03b569`: `fix(security): prevent DoS thread starvation and cache stampede with single-flight and fail-fast fallback (SEC-01, SEC-02)`
 5. `2e96026`: `fix(security): enforce schema validation and decimal precision in offline storage (SEC-06, SEC-07)`
 6. `37b93ed`: `fix(security): harden HTTP security headers and environment configuration (SEC-08, SEC-09)`
+7. `db9d870`: `feat(docker): add full-stack containerization and reconcile documentation`
+8. `7ef65d6`: `feat(ui): add DatePicker with logical constraints and fix offline banner false positive`
+
+---
+
+## 8. Полная контейнеризация стека и производственный деплой (Docker Architecture)
+
+Для обеспечения воспроизводимого запуска приложения на любых платформах (Windows / Linux / macOS) весь стек был полностью контейнеризирован с помощью **Docker Compose**:
+
+### 8.1. Архитектура сервисов
+
+```
+           [ Клиент / Браузер ]
+                    │ :3000
+                    ▼
+┌──────────────────────────────────────────────┐
+│  currency-converter-frontend (Nginx Alpine)  │
+│  - Раздача статики SPA (Vue 3 Production)    │
+│  - Reverse Proxy: /api/ ──► backend:8080/api/│
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼ :8080
+┌──────────────────────────────────────────────┐
+│  currency-converter-backend (Temurin 21 JRE) │
+│  - Spring Boot 3.3.4 (REST API, Problem JSON)│
+│  - Непривилегированный пользователь appuser  │
+│  - JVM Tuning: -Xms256m -Xmx512m             │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼ :5432
+┌──────────────────────────────────────────────┐
+│  currency-converter-postgres (Postgres 16)   │
+│  - Хранение кэша курсов (exchange_rates)     │
+│  - Автоматические миграции Flyway            │
+│  - Healthcheck: pg_isready                   │
+└──────────────────────────────────────────────┘
+```
+
+### 8.2. Особенности реализации контейнеров:
+1. **Multi-Stage сборка бэкенда (`backend/Dockerfile`):**
+   - Этап сборки на `maven:3.9.9-eclipse-temurin-21-alpine` с кэшированием зависимостей (`dependency:go-offline`).
+   - Финальный минималистичный образ на `eclipse-temurin:21-jre-alpine` без лишних сборочных утилит.
+   - Запуск от непривилегированного пользователя `appuser` (принцип наименьших привилегий).
+   - Ограничения памяти JVM (`-Xms256m -Xmx512m -XX:+UseG1GC`).
+2. **Multi-Stage сборка фронтенда (`frontend/Dockerfile`):**
+   - Этап сборки на `node:20-alpine` (`vue-tsc && vite build`).
+   - Финальный образ на `nginx:alpine` с кастомным конфигом [`nginx.conf`](frontend/nginx.conf).
+   - Реверс-прокси перенаправляет все вызовы `/api/` на сервис бэкенда `http://backend:8080/api/`, полностью исключая проблемы CORS и необходимость ручной настройки URL хостов.
+3. **Оркестрация (`docker-compose.yml`):**
+   - Бэкенд стартует только после подтверждения готовности базы данных (`condition: service_healthy`).
+   - Фронтенд ожидает запуска бэкенда.
+   - Порт PostgreSQL изолирован на `127.0.0.1:5432` для предотвращения несанкционированного внешнего доступа.
+
+### 8.3. Итог верификации в Docker:
+- Веб-интерфейс стабильно открывается по адресу: `http://localhost:3000`.
+- API бэкенда доступно по адресам: `http://localhost:8080/api/v1/currencies` и через прокси `http://localhost:3000/api/v1/currencies`.
+- Запросы конвертации на `POST /api/v1/convert` обрабатываются с точным сохранением финансовой точности (`BigDecimal`).
+- Все 27 модульных тестов (`21 JUnit + 6 Vitest`) выполняются успешно.
+
 
 

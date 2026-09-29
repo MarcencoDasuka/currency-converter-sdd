@@ -69,3 +69,16 @@ Phase 5: Release & Reporting (Branch: main)
 - [x] **TASK-503**: Write comprehensive `REPORT.md` including Section 6 Verification Evidence.
 - [x] **TASK-504**: Update `README.md` with setup and execution instructions.
 - [x] **TASK-505**: Push final state to `origin main`.
+
+---
+
+## Phase 6: Security Hardening & Vulnerability Remediation (Branch: `main`)
+- [x] **TASK-601**: Adversarial vulnerability audit across full stack (OWASP Top 10 / ASVS).
+- [x] **TASK-602**: Eliminate JVM Attach API deadlock on Windows non-ASCII paths with lightweight stubs.
+- [x] **TASK-603**: Harden amount and date range input validation (SEC-03, SEC-04).
+- [x] **TASK-604**: Resolve transactional self-invocation bypass via `ExchangeRatePersistenceService` (SEC-05).
+- [x] **TASK-605**: Implement single-flight concurrency lock, negative caching, and network fail-fast (SEC-01, SEC-02).
+- [x] **TASK-606**: Enforce schema validation and exact decimal arithmetic in `SnapshotStorage` (SEC-06, SEC-07).
+- [x] **TASK-607**: Harden HTTP security headers and environment configuration in `docker-compose.yml` (SEC-08, SEC-09).
+- [x] **TASK-608**: Update project reporting `REPORT.md` and documentation with verification evidence.
+

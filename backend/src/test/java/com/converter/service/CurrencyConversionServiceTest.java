@@ -1,5 +1,6 @@
 package com.converter.service;
 
+import com.converter.config.AppProperties;
 import com.converter.dto.ConversionRequestDto;
 import com.converter.dto.ConversionResponseDto;
 import com.converter.entity.ExchangeRateEntity;
@@ -7,10 +8,6 @@ import com.converter.exception.CurrencyNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,18 +16,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
 class CurrencyConversionServiceTest {
 
-    @Mock
-    private ExchangeRateService exchangeRateService;
-
-    @InjectMocks
     private CurrencyConversionService conversionService;
-
     private final LocalDate testDate = LocalDate.of(2026, 9, 28);
 
     @BeforeEach
@@ -53,13 +42,24 @@ class CurrencyConversionServiceTest {
                 List.of(mdl, usd, eur, jpy)
         );
 
-        org.mockito.Mockito.lenient().when(exchangeRateService.getRatesForDate(any())).thenReturn(bulletin);
+        AppProperties dummyProperties = new AppProperties(
+                new AppProperties.Bnm("https://www.bnm.md", 5, 10, 7),
+                new AppProperties.Cors(List.of("http://localhost:5173"))
+        );
+
+        ExchangeRateService stubService = new ExchangeRateService(null, null, null, dummyProperties) {
+            @Override
+            public ResolvedBulletin getRatesForDate(LocalDate date) {
+                return bulletin;
+            }
+        };
+
+        conversionService = new CurrencyConversionService(stubService);
     }
 
     @Test
     @DisplayName("Should convert base currency MDL to foreign currency EUR accurately")
     void convert_MdlToEur_DirectConversion() {
-        // 100 MDL / 19.45 = 5.141388... -> 5.1414
         ConversionRequestDto request = new ConversionRequestDto(
                 new BigDecimal("100.00"), "MDL", "EUR", testDate
         );
@@ -75,7 +75,6 @@ class CurrencyConversionServiceTest {
     @Test
     @DisplayName("Should convert foreign currency EUR to base currency MDL accurately (reverse direction)")
     void convert_EurToMdl_ReverseConversion() {
-        // 100 EUR * 19.45 = 1945.0000
         ConversionRequestDto request = new ConversionRequestDto(
                 new BigDecimal("100.00"), "EUR", "MDL", testDate
         );
@@ -89,7 +88,6 @@ class CurrencyConversionServiceTest {
     @Test
     @DisplayName("Should convert cross currencies USD to EUR through base MDL accurately")
     void convert_UsdToEur_CrossConversion() {
-        // 100 USD * (17.8250 / 19.4500) = 100 * 0.91645244... = 91.6452
         ConversionRequestDto request = new ConversionRequestDto(
                 new BigDecimal("100.00"), "USD", "EUR", testDate
         );
@@ -103,16 +101,14 @@ class CurrencyConversionServiceTest {
     @Test
     @DisplayName("Should properly account for nominal > 1 (e.g. 100 JPY)")
     void convert_UsdToJpy_AccountsForNominal() {
-        // MDL per 1 USD = 17.8250
-        // MDL per 1 JPY = 11.8500 / 100 = 0.1185
-        // 10 USD in JPY = 10 * (17.8250 / 0.1185) = 10 * 150.4219409... = 1504.2194
         ConversionRequestDto request = new ConversionRequestDto(
-                new BigDecimal("10.00"), "USD", "JPY", testDate
+                new BigDecimal("100.00"), "USD", "JPY", testDate
         );
 
         ConversionResponseDto response = conversionService.convert(request);
 
-        assertThat(response.convertedAmount()).isEqualByComparingTo(new BigDecimal("1504.2194"));
+        // 100 USD in JPY = 100 * (17.8250 / 0.1185) = 15042.1941
+        assertThat(response.convertedAmount()).isEqualByComparingTo(new BigDecimal("15042.1941"));
         assertThat(response.effectiveRate()).isEqualByComparingTo(new BigDecimal("150.421941"));
     }
 

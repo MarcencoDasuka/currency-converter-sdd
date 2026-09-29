@@ -49,6 +49,11 @@ public class SecurityConfig {
                     httpResponse.setHeader("X-Frame-Options", "DENY");
                     httpResponse.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
                     httpResponse.setHeader("Content-Security-Policy", "default-src 'self'");
+                    httpResponse.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+                    httpResponse.setHeader("X-Permitted-Cross-Domain-Policies", "none");
+                    if (request.isSecure()) {
+                        httpResponse.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+                    }
                 }
                 chain.doFilter(request, response);
             }

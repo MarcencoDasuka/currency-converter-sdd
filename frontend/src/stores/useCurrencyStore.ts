@@ -16,6 +16,7 @@ export const useCurrencyStore = defineStore('currency', () => {
   const conversionResult = ref<ConversionResponse | null>(null)
   const errorMessage = ref<string | null>(null)
   const offlineTier = ref<OfflineTier>('none')
+  const selectedDate = ref<string>('')
   const rateDate = ref<string>('')
   const sourceDescription = ref<string>('')
   const rollbackDaysApplied = ref<number>(0)
@@ -36,6 +37,9 @@ export const useCurrencyStore = defineStore('currency', () => {
   async function loadCurrencies(date?: string): Promise<void> {
     status.value = 'loading'
     errorMessage.value = null
+    if (date !== undefined) {
+      selectedDate.value = date
+    }
 
     try {
       const data = await apiClient.getCurrencies(date)
@@ -44,7 +48,7 @@ export const useCurrencyStore = defineStore('currency', () => {
       sourceDescription.value = data.source
       rollbackDaysApplied.value = data.rollbackDaysApplied
 
-      if (data.offline || data.cached) {
+      if (data.offline) {
         offlineTier.value = 'tier1_backend_cached'
       } else {
         offlineTier.value = 'none'
@@ -108,7 +112,8 @@ export const useCurrencyStore = defineStore('currency', () => {
       const response = await apiClient.convert({
         amount: amount.value,
         sourceCurrency: sourceCurrency.value,
-        targetCurrency: targetCurrency.value
+        targetCurrency: targetCurrency.value,
+        date: selectedDate.value || undefined
       })
 
       conversionResult.value = response
@@ -116,7 +121,7 @@ export const useCurrencyStore = defineStore('currency', () => {
       sourceDescription.value = response.source
       rollbackDaysApplied.value = response.rollbackDaysApplied
 
-      if (response.offline || response.cached) {
+      if (response.offline) {
         offlineTier.value = 'tier1_backend_cached'
       } else {
         offlineTier.value = 'none'
@@ -167,6 +172,7 @@ export const useCurrencyStore = defineStore('currency', () => {
     conversionResult,
     errorMessage,
     offlineTier,
+    selectedDate,
     rateDate,
     sourceDescription,
     rollbackDaysApplied,

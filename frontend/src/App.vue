@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useCurrencyStore } from './stores/useCurrencyStore'
 import OfflineBanner from './components/OfflineBanner.vue'
+import DatePicker from './components/DatePicker.vue'
 import CurrencyInput from './components/CurrencyInput.vue'
 import CurrencySelect from './components/CurrencySelect.vue'
 import ConversionResult from './components/ConversionResult.vue'
@@ -37,20 +38,17 @@ function handleConvert() {
             <p class="app-subtitle">Spec-Driven Development & National Bank of Moldova</p>
           </div>
         </div>
-
-        <div class="date-picker-group">
-          <label for="date-input" class="date-label">Rate Date:</label>
-          <input
-            id="date-input"
-            v-model="selectedDate"
-            type="date"
-            class="date-input"
-            @change="onDateChange"
-          />
-        </div>
       </header>
 
       <OfflineBanner />
+
+      <DatePicker
+        v-model="selectedDate"
+        :disabled="store.isLoading"
+        :rollback-days-applied="store.rollbackDaysApplied"
+        :rate-date="store.rateDate"
+        @change="onDateChange"
+      />
 
       <form @submit.prevent="handleConvert">
         <CurrencyInput
@@ -177,33 +175,6 @@ body {
   font-size: 0.825rem;
   color: #64748b;
   margin-top: 2px;
-}
-
-.date-picker-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-}
-
-.date-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #64748b;
-}
-
-.date-input {
-  padding: 6px 10px;
-  font-size: 0.85rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  outline: none;
-  background-color: #f8fafc;
-  color: #334155;
-}
-
-.date-input:focus {
-  border-color: #2563eb;
 }
 
 .selectors-row {

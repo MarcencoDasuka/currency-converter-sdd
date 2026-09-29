@@ -10,23 +10,32 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ExchangeRateService {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeRateService.class);
+    private static final Duration NEGATIVE_CACHE_TTL = Duration.ofMinutes(15);
 
     private final BnmClient bnmClient;
     private final BnmXmlParser bnmXmlParser;
     private final ExchangeRateRepository repository;
     private final ExchangeRatePersistenceService persistenceService;
     private final int maxRollbackDays;
+
+    // Single-flight coordination to prevent Cache Stampede (SEC-02)
+    private final ConcurrentHashMap<LocalDate, Object> dateLocks = new ConcurrentHashMap<>();
+
+    // Negative cache to prevent repeated querying for confirmed empty dates (SEC-01)
+    private final ConcurrentHashMap<LocalDate, Instant> knownEmptyDates = new ConcurrentHashMap<>();
 
     public record ResolvedBulletin(
             LocalDate rateDate,
@@ -69,27 +78,56 @@ public class ExchangeRateService {
         int rollbackDays = 0;
 
         while (rollbackDays <= maxRollbackDays) {
-            // 1. Check if we already have this exact date in PostgreSQL cache
+            // 1. Fast lookup in local PostgreSQL cache
             List<ExchangeRateEntity> cached = repository.findByRateDate(currentDate);
             if (!cached.isEmpty()) {
                 log.info("Found {} cached rates in PostgreSQL for date {}", cached.size(), currentDate);
                 return createResolvedBulletin(currentDate, date, "National Bank of Moldova (PostgreSQL Cache)", true, false, rollbackDays, cached);
             }
 
-            // 2. Try fetching from live BNM service
-            try {
-                String xml = bnmClient.fetchBulletinXml(currentDate);
-                BnmXmlParser.ParsedBulletin parsed = bnmXmlParser.parse(xml, currentDate);
+            // Check negative cache
+            Instant emptyTimestamp = knownEmptyDates.get(currentDate);
+            if (emptyTimestamp != null && Duration.between(emptyTimestamp, Instant.now()).compareTo(NEGATIVE_CACHE_TTL) < 0) {
+                log.debug("Date {} is marked as known empty in negative cache, skipping BNM request", currentDate);
+                currentDate = currentDate.minusDays(1);
+                rollbackDays++;
+                continue;
+            }
 
-                if (parsed.rates() != null && parsed.rates().size() >= 5) {
-                    log.info("Successfully fetched and parsed {} rates from BNM for date {}", parsed.rates().size(), parsed.bulletinDate());
-                    persistenceService.saveRatesIdempotently(parsed.rates());
-                    return createResolvedBulletin(parsed.bulletinDate(), date, "National Bank of Moldova", false, false, rollbackDays, parsed.rates());
-                } else {
-                    log.warn("BNM bulletin for date {} was empty or had insufficient rates ({})", currentDate, parsed.rates() != null ? parsed.rates().size() : 0);
+            // 2. Coordinated single-flight fetching from live BNM service
+            Object lock = dateLocks.computeIfAbsent(currentDate, k -> new Object());
+            boolean networkFailed = false;
+
+            synchronized (lock) {
+                // Re-check DB cache inside lock in case a parallel thread just saved it
+                cached = repository.findByRateDate(currentDate);
+                if (!cached.isEmpty()) {
+                    return createResolvedBulletin(currentDate, date, "National Bank of Moldova (PostgreSQL Cache)", true, false, rollbackDays, cached);
                 }
-            } catch (Exception e) {
-                log.warn("Could not retrieve bulletin for date {}: {}", currentDate, e.getMessage());
+
+                try {
+                    String xml = bnmClient.fetchBulletinXml(currentDate);
+                    BnmXmlParser.ParsedBulletin parsed = bnmXmlParser.parse(xml, currentDate);
+
+                    if (parsed.rates() != null && parsed.rates().size() >= 5) {
+                        log.info("Successfully fetched and parsed {} rates from BNM for date {}", parsed.rates().size(), parsed.bulletinDate());
+                        persistenceService.saveRatesIdempotently(parsed.rates());
+                        return createResolvedBulletin(parsed.bulletinDate(), date, "National Bank of Moldova", false, false, rollbackDays, parsed.rates());
+                    } else {
+                        log.warn("BNM bulletin for date {} was empty or had insufficient rates ({})", currentDate, parsed.rates() != null ? parsed.rates().size() : 0);
+                        knownEmptyDates.put(currentDate, Instant.now());
+                    }
+                } catch (Exception e) {
+                    log.warn("BNM communication failure for date {}: {}. Failing fast to prevent thread pool exhaustion.", currentDate, e.getMessage());
+                    networkFailed = true;
+                } finally {
+                    dateLocks.remove(currentDate, lock);
+                }
+            }
+
+            if (networkFailed) {
+                // If the remote gateway is down or unreachable, fail fast to DB cache rather than holding threads for 120s
+                break;
             }
 
             // Rollback 1 calendar day
@@ -97,7 +135,7 @@ public class ExchangeRateService {
             rollbackDays++;
         }
 
-        log.warn("Exceeded max rollback limit ({} days). Attempting fallback to latest available date in DB.", maxRollbackDays);
+        log.warn("Rollback ended or network failed. Attempting fallback to latest available date in DB.");
         Optional<LocalDate> latestDateOpt = repository.findLatestAvailableRateDate();
         if (latestDateOpt.isPresent()) {
             LocalDate latestDate = latestDateOpt.get();

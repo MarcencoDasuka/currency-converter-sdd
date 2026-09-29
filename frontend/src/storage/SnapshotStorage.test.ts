@@ -75,4 +75,30 @@ describe('SnapshotStorage', () => {
     const result = SnapshotStorage.calculateOfflineConversion(100, 'USD', 'NON_EXISTENT', fullSnapshot)
     expect(result).toBeNull()
   })
+
+  it('should reject corrupted or invalid snapshot schema from localStorage', () => {
+    // Malformed JSON data in localStorage
+    localStorage.setItem('currency_converter_last_snapshot', JSON.stringify({ rateDate: '2026-09-28', currencies: 'invalid' }))
+    const loaded = SnapshotStorage.loadSnapshot()
+    expect(loaded).toBeNull()
+
+    // Currency with negative rate
+    localStorage.setItem('currency_converter_last_snapshot', JSON.stringify({
+      rateDate: '2026-09-28',
+      source: 'test',
+      currencies: [{ code: 'USD', name: 'Dollar', nominal: 1, rate: -5 }]
+    }))
+    expect(SnapshotStorage.loadSnapshot()).toBeNull()
+  })
+
+  it('should return null for non-positive or invalid offline conversion amounts', () => {
+    const fullSnapshot: StorageSnapshot = {
+      ...sampleSnapshot,
+      savedAt: new Date().toISOString()
+    }
+
+    expect(SnapshotStorage.calculateOfflineConversion(-10, 'USD', 'EUR', fullSnapshot)).toBeNull()
+    expect(SnapshotStorage.calculateOfflineConversion(0, 'USD', 'EUR', fullSnapshot)).toBeNull()
+    expect(SnapshotStorage.calculateOfflineConversion(NaN, 'USD', 'EUR', fullSnapshot)).toBeNull()
+  })
 })

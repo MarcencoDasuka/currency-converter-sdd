@@ -50,14 +50,37 @@ run-tests.bat
 
 ---
 
-## Локальный запуск приложения
+## Запуск приложения
 
-### 1. Запуск базы данных PostgreSQL (Docker)
+### Вариант 1: Полный запуск через Docker Compose (Рекомендуемый)
+
+Все сервисы (PostgreSQL, Spring Boot бэкенд и Nginx с Vue 3 фронтендом) поднимаются одной командой:
+
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
-### 2. Запуск бэкенда (Spring Boot)
+- **Веб-интерфейс (GUI):** `http://localhost:3000`
+- **REST API бэкенда:** `http://localhost:8080/api/v1/currencies`
+- **База данных PostgreSQL:** `127.0.0.1:5432`
+
+Остановить контейнеры:
+```bash
+docker compose down
+```
+
+---
+
+### Вариант 2: Локальный запуск для разработки
+
+Если вы хотите запускать бэкенд и фронтенд локально на хосте:
+
+#### 1. Запуск базы данных PostgreSQL (Docker)
+```bash
+docker compose up -d postgres
+```
+
+#### 2. Запуск бэкенда (Spring Boot 3)
 ```cmd
 cd backend
 mvnw.cmd spring-boot:run
@@ -66,12 +89,13 @@ mvnw.cmd spring-boot:run
 
 Бэкенд стартует на `http://localhost:8080`.
 
-### 3. Запуск фронтенда (Vue 3 + Vite)
+#### 3. Запуск фронтенда (Vue 3 + Vite)
 ```cmd
 cd frontend
 npm.cmd install
 npm.cmd run dev
 ```
+*(Для Linux/macOS: `npm run dev`)*
 
 Интерфейс доступен по адресу: `http://localhost:5173`.
 

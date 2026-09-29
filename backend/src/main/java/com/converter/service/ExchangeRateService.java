@@ -6,6 +6,7 @@ import com.converter.exception.BulletinUnavailableException;
 import com.converter.repository.ExchangeRateRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +48,7 @@ public class ExchangeRateService {
             List<ExchangeRateEntity> rates
     ) {}
 
+    @Autowired
     public ExchangeRateService(
             BnmClient bnmClient,
             BnmXmlParser bnmXmlParser,

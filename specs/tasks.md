@@ -56,7 +56,7 @@ Phase 5: Release & Reporting (Branch: main)
 - [x] **TASK-402**: Unit tests for `CurrencyConversionService` (nominal scaling, cross-rates, identical currencies, precision rounding).
 - [x] **TASK-403**: Unit tests for `ExchangeRateService` rollback behavior (bounded to 7 days).
 - [x] **TASK-404**: Validation tests for REST controllers (RFC 9457 response on invalid, zero, or negative inputs).
-- [x] **TASK-405**: Integration tests with Testcontainers PostgreSQL verifying Flyway migrations and `ON CONFLICT DO UPDATE`.
+- [ ] **TASK-405**: Integration tests with Testcontainers PostgreSQL verifying Flyway migrations and `ON CONFLICT DO UPDATE` (deferred in local dev due to Windows JVM attach deadlock on non-ASCII user paths; logic covered via lightweight stubs and fast unit tests).
 - [x] **TASK-406**: Frontend unit/component tests for input validation and snapshot storage.
 - [x] **TASK-407**: Single-command test runner script (`run-tests.bat` / `npm test`).
 - [x] **TASK-408**: Commit tests atomically and push to `origin feature/tests`.

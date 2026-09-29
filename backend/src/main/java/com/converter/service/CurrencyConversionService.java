@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -18,6 +19,7 @@ public class CurrencyConversionService {
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final int RESULT_SCALE = 4;
     private static final int RATE_SCALE = 6;
+    public static final LocalDate MIN_SUPPORTED_DATE = LocalDate.of(1994, 1, 1);
 
     private final ExchangeRateService exchangeRateService;
 
@@ -28,6 +30,15 @@ public class CurrencyConversionService {
     public ConversionResponseDto convert(ConversionRequestDto request) {
         if (request.amount() == null || request.amount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Amount must be strictly greater than zero");
+        }
+
+        if (request.date() != null) {
+            if (request.date().isAfter(LocalDate.now())) {
+                throw new IllegalArgumentException("Date cannot be in the future");
+            }
+            if (request.date().isBefore(MIN_SUPPORTED_DATE)) {
+                throw new IllegalArgumentException("Date cannot be earlier than " + MIN_SUPPORTED_DATE);
+            }
         }
 
         String sourceCode = request.sourceCurrency().trim().toUpperCase();

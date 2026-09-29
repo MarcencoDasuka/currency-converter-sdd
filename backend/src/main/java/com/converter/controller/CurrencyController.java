@@ -29,6 +29,15 @@ public class CurrencyController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate date
     ) {
+        if (date != null) {
+            if (date.isAfter(LocalDate.now())) {
+                throw new IllegalArgumentException("Date cannot be in the future");
+            }
+            if (date.isBefore(LocalDate.of(1994, 1, 1))) {
+                throw new IllegalArgumentException("Date cannot be earlier than 1994-01-01");
+            }
+        }
+
         ExchangeRateService.ResolvedBulletin bulletin = exchangeRateService.getRatesForDate(date);
 
         List<CurrencyDto> currencyDtos = bulletin.rates().stream()

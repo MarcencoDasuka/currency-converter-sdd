@@ -100,6 +100,43 @@ class ConversionControllerValidationTest {
     }
 
     @Test
+    @DisplayName("Should return 400 when amount exceeds maximum allowed limit (1 trillion)")
+    void convert_ExcessiveAmount_ReturnsBadRequest() throws Exception {
+        String jsonPayload = """
+            {
+                "amount": 1000000000001.00,
+                "sourceCurrency": "USD",
+                "targetCurrency": "EUR"
+            }
+            """;
+
+        mockMvc.perform(post("/api/v1/convert")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonPayload))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.invalidParams[0].name").value("amount"));
+    }
+
+    @Test
+    @DisplayName("Should return 400 when date is in the future")
+    void convert_FutureDate_ReturnsBadRequest() throws Exception {
+        String jsonPayload = """
+            {
+                "amount": 100.00,
+                "sourceCurrency": "USD",
+                "targetCurrency": "EUR",
+                "date": "2099-12-31"
+            }
+            """;
+
+        mockMvc.perform(post("/api/v1/convert")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonPayload))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.invalidParams[0].name").value("date"));
+    }
+
+    @Test
     @DisplayName("Should return 200 OK when request is valid")
     void convert_ValidRequest_ReturnsOk() throws Exception {
         String jsonPayload = """

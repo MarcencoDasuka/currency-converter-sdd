@@ -77,7 +77,6 @@ currency-converter-sdd/
 │       ├── App.vue
 │       └── main.ts
 ├── docker-compose.yml               # Local PostgreSQL container definition
-├── run-tests.bat                    # Single-command runner on Windows
 ├── run-tests.sh                     # Single-command runner on Unix
 ├── README.md
 └── REPORT.md

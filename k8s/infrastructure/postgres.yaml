@@ -1,0 +1,159 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: currency-platform
+data:
+  01-init-databases.sql: |
+    SELECT 'CREATE DATABASE auth_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'auth_db')\gexec
+    SELECT 'CREATE DATABASE rates_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'rates_db')\gexec
+    SELECT 'CREATE DATABASE conversions_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'conversions_db')\gexec
+    SELECT 'CREATE DATABASE alerts_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'alerts_db')\gexec
+    SELECT 'CREATE DATABASE notifications_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'notifications_db')\gexec
+  02-configure-app-roles.sh: |
+    #!/bin/sh
+    set -eu
+    PGHOST="${PGHOST:-postgres}"
+    PGPORT="${PGPORT:-5432}"
+    PGUSER="${PGUSER:-${POSTGRES_USER:-postgres}}"
+    export PGPASSWORD="${PGPASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}}"
+
+    until pg_isready -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" >/dev/null 2>&1; do
+      sleep 1
+    done
+
+    for db in auth_db rates_db conversions_db alerts_db notifications_db; do
+      psql -v ON_ERROR_STOP=1 -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d postgres -v dbname="${db}" <<'EOSQL'
+    SELECT format('CREATE DATABASE %I', :'dbname')
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'dbname')\gexec
+    EOSQL
+    done
+
+    configure_role() {
+      db="$1"
+      role="$2"
+      pw="$3"
+      psql -v ON_ERROR_STOP=1 -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d postgres \
+        -v dbname="${db}" -v rolename="${role}" -v rolepw="${pw}" <<'EOSQL'
+    SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L', :'rolename', :'rolepw')
+    WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'rolename')\gexec
+    SELECT format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L', :'rolename', :'rolepw')\gexec
+    SELECT format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'dbname')\gexec
+    SELECT format('GRANT CONNECT, TEMP ON DATABASE %I TO %I', :'dbname', :'rolename')\gexec
+    EOSQL
+      psql -v ON_ERROR_STOP=1 -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${db}" \
+        -v rolename="${role}" <<'EOSQL'
+    SELECT format('ALTER SCHEMA public OWNER TO %I', :'rolename')\gexec
+    REVOKE ALL ON SCHEMA public FROM PUBLIC;
+    SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'rolename')\gexec
+    EOSQL
+    }
+
+    configure_role auth_db auth_app "${AUTH_DB_PASSWORD}"
+    configure_role rates_db rate_app "${RATE_DB_PASSWORD}"
+    configure_role conversions_db conversion_app "${CONVERSION_DB_PASSWORD}"
+    configure_role alerts_db alert_app "${ALERT_DB_PASSWORD}"
+    configure_role notifications_db notification_app "${NOTIFICATION_DB_PASSWORD}"
+    echo "PostgreSQL DB-per-service roles configured successfully."
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: currency-platform
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: currency-platform
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        tier: infra
+    spec:
+      securityContext:
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: currency-platform-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: currency-platform-secrets
+                  key: POSTGRES_PASSWORD
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d/01-init-databases.sql
+              subPath: 01-init-databases.sql
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d postgres"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init-scripts
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 512Mi

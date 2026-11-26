@@ -1,62 +1,353 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: currency-converter-postgres
+    container_name: currency-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-currency_db}
+      POSTGRES_DB: postgres
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    expose:
-      - "5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - currency_postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-currency_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d postgres"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 10s
+    networks:
+      - currency-net
 
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: currency-converter-backend
-    restart: unless-stopped
+  postgres-roles-init:
+    image: postgres:16-alpine
+    container_name: currency-postgres-roles-init
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-currency_db}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    expose:
-      - "8080"
+      PGHOST: postgres
+      PGPORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD is required}
+      RATE_DB_PASSWORD: ${RATE_DB_PASSWORD:?RATE_DB_PASSWORD is required}
+      CONVERSION_DB_PASSWORD: ${CONVERSION_DB_PASSWORD:?CONVERSION_DB_PASSWORD is required}
+      ALERT_DB_PASSWORD: ${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD is required}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?NOTIFICATION_DB_PASSWORD is required}
+    volumes:
+      - ./infrastructure/postgres/02-configure-app-roles.sh:/init/02-configure-app-roles.sh:ro
+    entrypoint: ["/bin/sh", "/init/02-configure-app-roles.sh"]
+    restart: "no"
+    networks:
+      - currency-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: currency-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-currency_app}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5673}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15673}:15672"
+    volumes:
+      - currency_rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/api/v1/currencies || exit 1"]
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 15s
+    networks:
+      - currency-net
+
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    container_name: currency-rabbitmq-init
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_MGMT_PORT: "15672"
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-currency_app}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+    volumes:
+      - ./infrastructure/rabbitmq/init-rabbitmq.sh:/init/init-rabbitmq.sh:ro
+    entrypoint: ["/bin/sh", "/init/init-rabbitmq.sh"]
+    restart: "no"
+    networks:
+      - currency-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: currency-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - currency-net
+
+  auth-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: auth-service
+        SERVER_PORT: "8081"
+    image: currency-platform/auth-service:latest
+    container_name: currency-auth-service
+    restart: unless-stopped
+    depends_on:
+      postgres-roles-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/auth_db
+      SPRING_DATASOURCE_USERNAME: auth_app
+      SPRING_DATASOURCE_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-3600}
+      JWT_ISSUER: ${JWT_ISSUER:-currency-platform-auth}
+    ports:
+      - "127.0.0.1:8181:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8081/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
       start_period: 25s
+    networks:
+      - currency-net
+
+  rate-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: rate-service
+        SERVER_PORT: "8082"
+    image: currency-platform/rate-service:latest
+    container_name: currency-rate-service
+    restart: unless-stopped
+    depends_on:
+      postgres-roles-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_PORT: "8082"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/rates_db
+      SPRING_DATASOURCE_USERNAME: rate_app
+      SPRING_DATASOURCE_PASSWORD: ${RATE_DB_PASSWORD:?RATE_DB_PASSWORD is required}
+      BNM_BASE_URL: ${BNM_BASE_URL:-https://www.bnm.md/en/official_exchange_rates}
+      BNM_MAX_ROLLBACK_DAYS: ${BNM_MAX_ROLLBACK_DAYS:-7}
+    ports:
+      - "127.0.0.1:8182:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8082/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    networks:
+      - currency-net
+
+  conversion-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: conversion-service
+        SERVER_PORT: "8083"
+    image: currency-platform/conversion-service:latest
+    container_name: currency-conversion-service
+    restart: unless-stopped
+    depends_on:
+      postgres-roles-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
+      rate-service:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8083"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/conversions_db
+      SPRING_DATASOURCE_USERNAME: conversion_app
+      SPRING_DATASOURCE_PASSWORD: ${CONVERSION_DB_PASSWORD:?CONVERSION_DB_PASSWORD is required}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-currency_app}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+      RATE_SERVICE_URL: http://rate-service:8082
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:-currency-platform-auth}
+    ports:
+      - "127.0.0.1:8183:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8083/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    networks:
+      - currency-net
+
+  alert-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: alert-service
+        SERVER_PORT: "8084"
+    image: currency-platform/alert-service:latest
+    container_name: currency-alert-service
+    restart: unless-stopped
+    depends_on:
+      postgres-roles-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
+      rate-service:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8084"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/alerts_db
+      SPRING_DATASOURCE_USERNAME: alert_app
+      SPRING_DATASOURCE_PASSWORD: ${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD is required}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-currency_app}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+      RATE_SERVICE_URL: http://rate-service:8082
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:-currency-platform-auth}
+    ports:
+      - "127.0.0.1:8184:8084"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8084/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    networks:
+      - currency-net
+
+  notification-service:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: notification-service
+        SERVER_PORT: "8085"
+    image: currency-platform/notification-service:latest
+    container_name: currency-notification-service
+    restart: unless-stopped
+    depends_on:
+      postgres-roles-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_PORT: "8085"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/notifications_db
+      SPRING_DATASOURCE_USERNAME: notification_app
+      SPRING_DATASOURCE_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?NOTIFICATION_DB_PASSWORD is required}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-currency_app}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:-currency-platform-auth}
+    ports:
+      - "127.0.0.1:8185:8085"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8085/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    networks:
+      - currency-net
+
+  api-gateway:
+    build:
+      context: ./services
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: api-gateway
+        SERVER_PORT: "8080"
+    image: currency-platform/api-gateway:latest
+    container_name: currency-api-gateway
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      rate-service:
+        condition: service_healthy
+      conversion-service:
+        condition: service_healthy
+      alert-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      AUTH_SERVICE_URL: http://auth-service:8081
+      RATE_SERVICE_URL: http://rate-service:8082
+      CONVERSION_SERVICE_URL: http://conversion-service:8083
+      ALERT_SERVICE_URL: http://alert-service:8084
+      NOTIFICATION_SERVICE_URL: http://notification-service:8085
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:-currency-platform-auth}
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8095}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      - currency-net
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: currency-converter-frontend
+    image: currency-platform/frontend:latest
+    container_name: currency-frontend
     restart: unless-stopped
     depends_on:
-      backend:
+      api-gateway:
         condition: service_healthy
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3001}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 3s
-      retries: 3
+      retries: 5
       start_period: 5s
+    networks:
+      - currency-net
 
 volumes:
-  postgres_data:
+  currency_postgres_data:
+  currency_rabbitmq_data:
+
+networks:
+  currency-net:
+    driver: bridge

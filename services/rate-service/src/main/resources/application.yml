@@ -1,0 +1,36 @@
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+
+spring:
+  application:
+    name: rate-service
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/rates_db}
+    username: ${SPRING_DATASOURCE_USERNAME:rate_app}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    hikari:
+      maximum-pool-size: 8
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+rate:
+  bnm:
+    base-url: ${BNM_BASE_URL:https://www.bnm.md/en/official_exchange_rates}
+    connect-timeout-seconds: ${BNM_CONNECT_TIMEOUT_SECONDS:3}
+    read-timeout-seconds: ${BNM_READ_TIMEOUT_SECONDS:8}
+    max-rollback-days: ${BNM_MAX_ROLLBACK_DAYS:7}
+
+springdoc:
+  swagger-ui:
+    path: /docs
+  api-docs:
+    path: /openapi.json

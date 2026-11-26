@@ -1,0 +1,13 @@
+<included>
+    <springProperty scope="context" name="SERVICE_NAME" source="spring.application.name" defaultValue="currency-service"/>
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="com.converter.common.logging.JsonConsoleLayout">
+                <service>${SERVICE_NAME}</service>
+            </layout>
+        </encoder>
+    </appender>
+    <root level="${LOG_LEVEL:-INFO}">
+        <appender-ref ref="JSON_CONSOLE"/>
+    </root>
+</included>

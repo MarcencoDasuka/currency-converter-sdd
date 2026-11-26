@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: currency-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: auth-service
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-service
+  namespace: currency-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: rate-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversion-service
+  namespace: currency-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: conversion-service
+  ports:
+    - name: http
+      port: 8083
+      targetPort: 8083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-service
+  namespace: currency-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: alert-service
+  ports:
+    - name: http
+      port: 8084
+      targetPort: 8084
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: currency-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: notification-service
+  ports:
+    - name: http
+      port: 8085
+      targetPort: 8085
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: currency-platform
+spec:
+  type: NodePort
+  selector:
+    app: api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: currency-platform
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30091

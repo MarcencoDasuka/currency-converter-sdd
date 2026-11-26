@@ -1,0 +1,150 @@
+name: Currency Platform CI/CD
+
+on:
+  push:
+    branches: ["main", "feat/microservices-k8s-cicd"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend Unit & Testcontainers Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run multi-module microservices test suite (PostgreSQL, RabbitMQ, Redis Testcontainers)
+        working-directory: services
+        run: |
+          chmod +x mvnw
+          ./mvnw test -B
+
+      - name: Run legacy monolith regression tests
+        working-directory: backend
+        run: |
+          chmod +x mvnw
+          ./mvnw test -B
+
+  frontend-tests:
+    name: Frontend Vitest & Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install, test, and build Vue 3 frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+  k8s-and-contract-validation:
+    name: Kubernetes Schema, Compose & Security Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run static security, Dockerfile, K8s & LF line-ending contract checks
+        run: python3 scripts/validate-contracts.py
+
+      - name: Install kubeconform and validate Kubernetes manifests
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -strict -summary \
+            k8s/namespace.yaml \
+            k8s/configmaps/ \
+            k8s/infrastructure/ \
+            k8s/deployments/ \
+            k8s/services/ \
+            k8s/networkpolicies/
+
+      - name: Validate Docker Compose schema
+        env:
+          POSTGRES_PASSWORD: ci_pg_validate_only
+          AUTH_DB_PASSWORD: ci_auth_validate_only
+          RATE_DB_PASSWORD: ci_rate_validate_only
+          CONVERSION_DB_PASSWORD: ci_conv_validate_only
+          ALERT_DB_PASSWORD: ci_alert_validate_only
+          NOTIFICATION_DB_PASSWORD: ci_notif_validate_only
+          RABBITMQ_PASSWORD: ci_rabbit_validate_only
+          JWT_SECRET: ci_validate_only_secret_key_at_least_32_bytes_long
+        run: docker compose config -q
+
+  build-and-live-product-smoke:
+    name: Docker Build & Live Full-Stack E2E Smoke Test
+    runs-on: ubuntu-latest
+    needs:
+      - backend-tests
+      - frontend-tests
+      - k8s-and-contract-validation
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate ephemeral CI secrets (.env)
+        run: |
+          cat <<EOF > .env
+          FRONTEND_PORT=3001
+          GATEWAY_PORT=8095
+          POSTGRES_PORT=5433
+          RABBITMQ_PORT=5673
+          RABBITMQ_MGMT_PORT=15673
+          REDIS_PORT=6380
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=$(openssl rand -hex 16)
+          AUTH_DB_PASSWORD=$(openssl rand -hex 16)
+          RATE_DB_PASSWORD=$(openssl rand -hex 16)
+          CONVERSION_DB_PASSWORD=$(openssl rand -hex 16)
+          ALERT_DB_PASSWORD=$(openssl rand -hex 16)
+          NOTIFICATION_DB_PASSWORD=$(openssl rand -hex 16)
+          RABBITMQ_USERNAME=currency_app
+          RABBITMQ_PASSWORD=$(openssl rand -hex 16)
+          JWT_SECRET=$(openssl rand -hex 32)
+          JWT_ACCESS_TTL_SECONDS=3600
+          JWT_ISSUER=currency-platform-auth
+          BNM_BASE_URL=https://www.bnm.md/en/official_exchange_rates
+          BNM_MAX_ROLLBACK_DAYS=7
+          EOF
+
+      - name: Build all microservice, gateway, and frontend container images
+        run: docker compose build
+
+      - name: Boot full microservices product stack and wait for health checks
+        run: docker compose up -d --wait --wait-timeout 240
+
+      - name: Run 9-step Live End-to-End Smoke Suite (UI, Gateway, Auth, Rates, BigDecimal Convert, RabbitMQ, Alerts, IDOR)
+        run: |
+          chmod +x scripts/e2e-smoke.sh
+          ./scripts/e2e-smoke.sh
+
+      - name: Collect container status and logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail=80
+
+      - name: Tear down ephemeral CI stack
+        if: always()
+        run: docker compose down -v --remove-orphans

@@ -1,0 +1,47 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: api-gateway
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+      timeout: 2s
+
+platform:
+  jwt:
+    secret: ${JWT_SECRET}
+    issuer: ${JWT_ISSUER:currency-platform-auth}
+
+gateway:
+  connect-timeout-seconds: ${GATEWAY_CONNECT_TIMEOUT_SECONDS:3}
+  read-timeout-seconds: ${GATEWAY_READ_TIMEOUT_SECONDS:15}
+  max-body-bytes: ${GATEWAY_MAX_BODY_BYTES:1048576}
+  trust-proxy-headers: ${GATEWAY_TRUST_PROXY_HEADERS:false}
+  cors-allowed-origins:
+    - http://localhost:3001
+    - http://127.0.0.1:3001
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+  upstreams:
+    auth-service-url: ${AUTH_SERVICE_URL:http://auth-service:8081}
+    rate-service-url: ${RATE_SERVICE_URL:http://rate-service:8082}
+    conversion-service-url: ${CONVERSION_SERVICE_URL:http://conversion-service:8083}
+    alert-service-url: ${ALERT_SERVICE_URL:http://alert-service:8084}
+    notification-service-url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8085}
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    default-requests-per-window: ${RATE_LIMIT_DEFAULT:120}
+    auth-requests-per-window: ${RATE_LIMIT_AUTH:30}
+    window-seconds: ${RATE_LIMIT_WINDOW_SECONDS:60}
+
+springdoc:
+  swagger-ui:
+    path: /docs
+  api-docs:
+    path: /openapi.json

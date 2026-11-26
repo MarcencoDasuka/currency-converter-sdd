@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: currency-platform
+  labels:
+    app.kubernetes.io/part-of: currency-converter-platform
+    app.kubernetes.io/managed-by: kubectl
